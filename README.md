@@ -21,7 +21,7 @@ The timeline follows the natural radiation-fog cycle: mist forms on clear nights
 
 ## How to use 使用方法
 
-- **Online 在线**: see the link in the repository description.
+- **Online 在线**: https://peony-timelapse.vercel.app (Mac / iPhone)
 - **Gesture 手势**: click 📷 to allow the camera, then open/close your hand. The badge shows `张开 xx%`; the page calibrates to your hand automatically.
 - **Without a camera 无摄像头**: drag the slider, press ▶ (play) / ◀ (rewind), or **swipe up/down anywhere** (up = forward). 拖动滑块、点 ▶/◀，或在画面上**上下滑动**（上滑 = 时光流逝）。
 - **⚔️ Lightsaber mode 光剑模式**: a small bonus scene.
