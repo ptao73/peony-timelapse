@@ -2,9 +2,29 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#050a1a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="花开花落">
+  <link rel="apple-touch-icon" href="/icons/icon-180.png">
+  <link rel="manifest" href="/manifest.webmanifest">
   <!-- 网站根目录自动跳转到牡丹页面 -->
   <meta http-equiv="refresh" content="0; url=web/index.html">
   <title>庭前花开花落</title>
+  <script>
+    if (
+      'serviceWorker' in navigator &&
+      (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')
+    ) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {});
+      });
+    }
+  </script>
 </head>
-<body><a href="web/index.html">庭前花开花落 · 天上云卷云舒</a></body>
+<body style="background:#050a1a;color:#fff;margin:0;display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;">
+  <a href="web/index.html" style="color:#ffe8c8;text-decoration:none;">庭前花开花落 · 天上云卷云舒</a>
+</body>
 </html>

@@ -23,8 +23,15 @@ The timeline follows the natural radiation-fog cycle: mist forms on clear nights
 
 - **Online 在线**: see the link in the repository description.
 - **Gesture 手势**: click 📷 to allow the camera, then open/close your hand. The badge shows `张开 xx%`; the page calibrates to your hand automatically.
-- **Without a camera 无摄像头**: drag the slider, or press ▶ (play) / ◀ (rewind).
+- **Without a camera 无摄像头**: drag the slider, press ▶ (play) / ◀ (rewind), or **swipe up/down anywhere** (up = forward). 拖动滑块、点 ▶/◀，或在画面上**上下滑动**（上滑 = 时光流逝）。
 - **⚔️ Lightsaber mode 光剑模式**: a small bonus scene.
+
+### iPhone app (PWA) 安装到 iPhone
+
+1. Open the site in **Safari** 用 Safari 打开网址
+2. Tap **Share → Add to Home Screen** 点「分享 → 添加到主屏幕」
+3. Launch it from the icon: full screen, works **offline** after the first visit, gesture control uses the front camera.
+   从图标启动：全屏运行，首次联网打开后可**离线**使用，手势用前置摄像头。
 
 ### Run locally 本地运行
 
@@ -32,7 +39,7 @@ The page loads images into WebGL, which browsers block for `file://` pages, so s
 页面用 WebGL 加载图片，直接双击 html 会被浏览器拦截，需要用本地服务器打开：
 
 ```bash
-git clone https://github.com/<your-account>/peony-timelapse.git
+git clone https://github.com/ptao73/peony-timelapse.git
 cd peony-timelapse
 python3 -m http.server 8000
 # open http://localhost:8000
@@ -48,7 +55,7 @@ One number **T (0–1)** drives everything; every layer is a pure function of T,
 3. **Falling petals**: 4 painted petal sprites (`petals/`) whose positions are a function of T.
 4. **Hand tracking**: MediaPipe Hands; openness = average straightness of the four fingers in 3D, self-calibrated, with dead zones at both ends.
 
-Tech: plain HTML + [three.js r128](https://threejs.org/) + [MediaPipe Hands](https://developers.google.com/mediapipe). No build step.
+Tech: plain HTML + [three.js r128](https://threejs.org/) + [MediaPipe Hands](https://developers.google.com/mediapipe) (both self-hosted in `vendor/`), PWA manifest + service worker. No build step.
 
 ## Project structure 目录结构
 
@@ -57,6 +64,9 @@ index.html        → redirects to web/index.html
 web/index.html    the page (shaders, gesture control, UI)
 frames/           frame_01.webp … frame_12.webp  (bud → full bloom, transparent WebP)
 petals/           petal_1.webp … petal_4.webp
+icons/            app icons (PWA / iPhone home screen)
+vendor/           three.js and MediaPipe Hands, pinned versions
+manifest.webmanifest, sw.js   PWA manifest and offline service worker
 docs/             build spec, fix notes and the image-generation prompts
 ```
 
