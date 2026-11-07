@@ -1,0 +1,1360 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>庭前花开花落，天上云卷云舒 - 牡丹延时交互</title>
+  <!-- Three.js r128 (用于 WebGL 天空云层着色器、预乘 Alpha 花朵混合、花瓣飘落与光剑模式) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <!-- MediaPipe Hands & Camera Utils (用于手势识别：张手时光流逝，握拳时光倒流) -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+    body, html {
+      width: 100%; height: 100%; overflow: hidden;
+      background: #050a1a;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: #fff;
+    }
+
+    /* WebGL 主画布容器：牡丹模式与光剑模式共用同一个高性能渲染器 */
+    #canvas-container {
+      width: 100vw; height: 100vh;
+      position: absolute; left: 0; top: 0; z-index: 1;
+    }
+
+    /* 顶部模式导航栏 */
+    .top-nav {
+      position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+      z-index: 10; display: flex; align-items: center; gap: 8px;
+      background: rgba(18, 18, 28, 0.7); backdrop-filter: blur(16px);
+      padding: 6px 10px; border-radius: 40px; border: 1px solid rgba(255, 255, 255, 0.12);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+    }
+    .mode-btn {
+      padding: 8px 18px; border-radius: 30px; border: none; background: transparent;
+      color: rgba(255, 255, 255, 0.65); font-size: 13px; font-weight: 600; cursor: pointer;
+      transition: all 0.25s ease; display: flex; align-items: center; gap: 6px;
+    }
+    .mode-btn:hover { color: #fff; background: rgba(255, 255, 255, 0.08); }
+    .mode-btn.active {
+      background: linear-gradient(135deg, #b71c1c, #880e2f); color: #fff;
+      box-shadow: 0 4px 15px rgba(183, 28, 28, 0.4);
+    }
+
+    /* 右上角摄像头与手势骨架 HUD 小窗 */
+    .pip-hud {
+      position: absolute; top: 16px; right: 16px; z-index: 10;
+      width: 185px; height: 135px; border-radius: 14px; overflow: hidden;
+      background: rgba(12, 12, 20, 0.8); border: 1px solid rgba(255, 255, 255, 0.15);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6); backdrop-filter: blur(10px);
+    }
+    #webcam-video {
+      width: 100%; height: 100%; object-fit: cover;
+      transform: scaleX(-1); display: block; opacity: 0.35;
+    }
+    #skeleton-canvas {
+      position: absolute; left: 0; top: 0; width: 100%; height: 100%;
+      transform: scaleX(-1);
+    }
+    .hud-badge {
+      position: absolute; bottom: 6px; left: 8px; right: 8px; font-size: 10px;
+      color: #00ffcc; font-weight: 700; letter-spacing: 0.4px;
+      text-shadow: 0 0 8px rgba(0, 255, 204, 0.8);
+      line-height: 1.35;
+    }
+    .hud-error {
+      position: absolute; top: 6px; left: 8px; right: 8px; font-size: 10px;
+      color: #ff6b6b; font-weight: 700;
+      text-shadow: 0 0 6px rgba(0, 0, 0, 0.9);
+      word-break: break-all;
+    }
+
+    /* 底部时光控制面板 */
+    .bottom-panel {
+      position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+      z-index: 10; width: min(94%, 640px);
+      background: rgba(15, 15, 25, 0.75); backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 20px;
+      padding: 14px 20px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+    }
+    .panel-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 10px; font-size: 12px;
+    }
+    .clock-display {
+      font-size: 15px; font-weight: 700; color: #ffe8c8;
+      letter-spacing: 0.5px; text-shadow: 0 0 12px rgba(255, 190, 120, 0.45);
+    }
+    .dir-badge {
+      padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 600;
+      background: rgba(255, 255, 255, 0.1); color: #ffd599;
+      border: 1px solid rgba(255, 213, 153, 0.25);
+      transition: all 0.2s ease;
+    }
+    .dir-badge.rewind {
+      color: #9be7ff; border-color: rgba(155, 231, 255, 0.3);
+      background: rgba(80, 160, 220, 0.15);
+    }
+    .slider-row {
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    }
+    .slider-label {
+      font-size: 12px; font-weight: 600; color: #ccc; min-width: 62px;
+      font-variant-numeric: tabular-nums;
+    }
+    .slider-wrap { flex: 1; display: flex; align-items: center; }
+    input[type=range] {
+      width: 100%; -webkit-appearance: none; background: rgba(255, 255, 255, 0.18);
+      height: 6px; border-radius: 3px; outline: none;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%;
+      background: #f08a5d; cursor: pointer; box-shadow: 0 0 10px #f08a5d;
+    }
+    .btn-group { display: flex; align-items: center; gap: 6px; }
+    .play-btn {
+      padding: 6px 12px; border-radius: 14px; border: 1px solid rgba(255, 255, 255, 0.2);
+      background: rgba(183, 28, 28, 0.35); color: #fff; font-size: 12px;
+      cursor: pointer; white-space: nowrap; transition: background 0.2s ease;
+    }
+    .play-btn:hover { background: rgba(183, 28, 28, 0.65); }
+    .play-btn.secondary { background: rgba(45, 85, 140, 0.4); }
+    .play-btn.secondary:hover { background: rgba(45, 85, 140, 0.7); }
+
+    /* 右下角摄像头开关按钮 */
+    .cam-btn {
+      position: absolute; bottom: 20px; right: 20px; z-index: 10;
+      padding: 10px 16px; border-radius: 30px; border: 1px solid rgba(255, 255, 255, 0.2);
+      background: rgba(20, 20, 30, 0.8); color: #fff; font-size: 12px; cursor: pointer;
+      backdrop-filter: blur(10px);
+    }
+    .cam-btn:hover { background: rgba(40, 40, 60, 0.9); }
+  </style>
+</head>
+<body>
+  <!-- WebGL 渲染容器 -->
+  <div id="canvas-container"></div>
+
+  <!-- 顶部导航栏：保留原版双模式切换 -->
+  <div class="top-nav">
+    <button class="mode-btn active" id="btn-peony">🌸 庭前花开花落</button>
+    <button class="mode-btn" id="btn-saber">⚔️ 双手激光剑对决</button>
+  </div>
+
+  <!-- 右上角实时手势 HUD -->
+  <div class="pip-hud">
+    <video id="webcam-video" playsinline muted autoplay></video>
+    <canvas id="skeleton-canvas" width="185" height="135"></canvas>
+    <div class="hud-error" id="hud-missing"></div>
+    <div class="hud-badge" id="hud-status">MediaPipe 准备中</div>
+  </div>
+
+  <!-- 底部控制面板 (牡丹延时模式专用) -->
+  <div class="bottom-panel" id="peony-panel">
+    <div class="panel-header">
+      <span class="clock-display" id="clock-label">00:00 午夜</span>
+      <span class="dir-badge" id="dir-badge">时光流逝 ▶</span>
+    </div>
+    <div class="slider-row">
+      <span class="slider-label" id="val-label">T = 0.00</span>
+      <div class="slider-wrap">
+        <input type="range" id="bloom-slider" min="0" max="1" step="0.001" value="0">
+      </div>
+      <div class="btn-group">
+        <button class="play-btn" id="play-btn" title="从午夜到清晨播放 (约12秒)">▶ 播放</button>
+        <button class="play-btn secondary" id="rewind-btn" title="时光倒流回午夜 (约12秒)">◀ 倒放</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 摄像头手势启动按钮 -->
+  <button class="cam-btn" id="cam-toggle">📷 启动手势摄像头</button>
+
+  <script>
+    // =========================================================================
+    // 0. 工具函数与全局状态定义
+    // =========================================================================
+    const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+    const lerp = (a, b, t) => a + (b - a) * t;
+    const smoothstep = (e0, e1, x) => {
+      const t = clamp((x - e0) / (e1 - e0), 0.0, 1.0);
+      return t * t * (3.0 - 2.0 * t);
+    };
+
+    const hudStatus = document.getElementById('hud-status');
+    const hudMissing = document.getElementById('hud-missing');
+    const clockLabel = document.getElementById('clock-label');
+    const valLabel = document.getElementById('val-label');
+    const dirBadge = document.getElementById('dir-badge');
+    const bloomSlider = document.getElementById('bloom-slider');
+
+    // 核心时间变量 T ∈ [0, 1]：0 = 00:00 午夜，0.5 = 05:30 黎明，1.0 = 08:00 清晨
+    let currentT = 0.0;
+    let targetT = 0.0;
+    let prevT = 0.0;
+    let lastDirection = 1; // 1 表示时光流逝 ▶，-1 表示时光倒流 ◀
+
+    // 播放控制状态：playDir = 1(正放), -1(倒放), 0(暂停/手动)
+    let playDir = 0;
+    let lastFrameTime = performance.now();
+    const PLAY_DURATION_MS = 12000; // 完整播放 T: 0 → 1 耗时约 12 秒
+
+    let activeMode = 'peony'; // 'peony' 或 'saber'
+
+    // =========================================================================
+    // 1. 初始化 Three.js 渲染器与两个场景（牡丹延时场景 + 双光剑场景）
+    // =========================================================================
+    const container = document.getElementById('canvas-container');
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    container.appendChild(renderer.domElement);
+
+    // 牡丹延时正交相机与场景（使用标准 NDC 坐标 [-1, 1]）
+    const peonyScene = new THREE.Scene();
+    const peonyCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
+    peonyCamera.position.z = 5;
+
+    // =========================================================================
+    // 2. 加载 12 帧牡丹图像与 4 张花瓣贴图（含缺失文件容错与 HUD 提示）
+    // =========================================================================
+    const TOTAL_FRAMES = 12;
+    const frameTextures = new Array(TOTAL_FRAMES).fill(null);
+    const frameLoaded = new Array(TOTAL_FRAMES).fill(false);
+    const missingFiles = [];
+
+    // 创建 1x1 透明占位贴图，防止贴图未加载完成前报错
+    const fallbackData = new Uint8Array([0, 0, 0, 0]);
+    const fallbackTexture = new THREE.DataTexture(fallbackData, 1, 1, THREE.RGBAFormat);
+    fallbackTexture.needsUpdate = true;
+
+    function updateMissingHud() {
+      if (missingFiles.length > 0) {
+        const msg = '缺失文件: ' + missingFiles.join(', ');
+        hudMissing.innerText = msg;
+        hudStatus.innerText = msg;
+      }
+    }
+
+    // 配置贴图过滤参数（不在 GPU 上传阶段做翻转问题，保持标准 UV）
+    function createTextureFromImage(img) {
+      const tex = new THREE.Texture(img);
+      tex.minFilter = THREE.LinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+      tex.wrapS = THREE.ClampToEdgeWrapping;
+      tex.wrapT = THREE.ClampToEdgeWrapping;
+      // 我们在着色器内显式执行 rgb * a 预乘，因此保持 flipY = true 即可
+      tex.premultiplyAlpha = false;
+      tex.needsUpdate = true;
+      return tex;
+    }
+
+    // 加载 ../frames/frame_01.png ... frame_12.png
+    for (let i = 0; i < TOTAL_FRAMES; i++) {
+      const idxStr = String(i + 1).padStart(2, '0');
+      const fileName = `frame_${idxStr}.webp`;
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        frameTextures[i] = createTextureFromImage(img);
+        frameLoaded[i] = true;
+        if (typeof plantUniforms !== 'undefined' && activeMode === 'peony') {
+          renderPeonyAt(currentT, performance.now() * 0.001);
+        }
+      };
+      img.onerror = () => {
+        if (!missingFiles.includes(fileName)) {
+          missingFiles.push(fileName);
+          updateMissingHud();
+        }
+      };
+      img.src = `../frames/${fileName}`;
+    }
+
+    // 查找距离目标帧索引最近的已加载贴图（若某帧缺失，自动回退到最近可用帧）
+    function getNearestFrameTexture(index) {
+      const clampedIdx = clamp(Math.round(index), 0, TOTAL_FRAMES - 1);
+      if (frameLoaded[clampedIdx] && frameTextures[clampedIdx]) {
+        return frameTextures[clampedIdx];
+      }
+      for (let dist = 1; dist < TOTAL_FRAMES; dist++) {
+        const left = clampedIdx - dist;
+        const right = clampedIdx + dist;
+        if (left >= 0 && frameLoaded[left] && frameTextures[left]) return frameTextures[left];
+        if (right < TOTAL_FRAMES && frameLoaded[right] && frameTextures[right]) return frameTextures[right];
+      }
+      return fallbackTexture;
+    }
+
+    // 加载 ../petals/petal_1.png ... petal_4.png
+    const TOTAL_PETAL_TEX = 4;
+    const petalTextures = new Array(TOTAL_PETAL_TEX).fill(fallbackTexture);
+    for (let i = 0; i < TOTAL_PETAL_TEX; i++) {
+      const fileName = `petal_${i + 1}.webp`;
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        petalTextures[i] = createTextureFromImage(img);
+        // 更新使用该贴图的花瓣材质
+        if (typeof petalMeshes !== 'undefined') {
+          petalMeshes.forEach(p => {
+            if (p.userData.texIndex === i) {
+              p.material.uniforms.uTex.value = petalTextures[i];
+            }
+          });
+          if (activeMode === 'peony') {
+            renderPeonyAt(currentT, performance.now() * 0.001);
+          }
+        }
+      };
+      img.onerror = () => {
+        if (!missingFiles.includes(fileName)) {
+          missingFiles.push(fileName);
+          updateMissingHud();
+        }
+      };
+      img.src = `../petals/${fileName}`;
+    }
+
+    // =========================================================================
+    // 3. 第一层全屏着色器：天空渐变 + 繁星 + 月亮光晕 + 动态云海 + 丁达尔耶稣光
+    // =========================================================================
+    const skyCloudVertexShader = `
+      varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        gl_Position = vec4(position.xy, 0.0, 1.0);
+      }
+    `;
+
+    const skyCloudFragmentShader = `
+      precision highp float;
+      varying vec2 vUv;
+
+      uniform float uT;       // 核心时间变量 T ∈ [0, 1]
+      uniform float uDrift;   // 缓慢的真实时钟微漂移，赋予云层生命感
+      uniform float uAspect;  // 屏幕宽高比 width / height
+
+      // 二维随机哈希函数
+      float hash21(vec2 p) {
+        p = fract(p * vec2(234.34, 435.345));
+        p += dot(p, p + 34.23);
+        return fract(p.x * p.y);
+      }
+
+      // 平滑二维价值噪声
+      float valueNoise(vec2 p) {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        vec2 u = f * f * (3.0 - 2.0 * f);
+        float a = hash21(i);
+        float b = hash21(i + vec2(1.0, 0.0));
+        float c = hash21(i + vec2(0.0, 1.0));
+        float d = hash21(i + vec2(1.0, 1.0));
+        return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+      }
+
+      // 5 层分形布朗运动 (FBM) 生成自然云层与雾气纹理
+      float fbm(vec2 p) {
+        float v = 0.0;
+        float amp = 0.5;
+        mat2 rot = mat2(0.8, 0.6, -0.6, 0.8);
+        for (int i = 0; i < 5; i++) {
+          v += amp * valueNoise(p);
+          p = rot * p * 2.02 + vec2(13.7, 9.2);
+          amp *= 0.5;
+        }
+        return v;
+      }
+
+      // 锐利星空采样函数
+      float starLayer(vec2 uv, float scale, float seed, float time) {
+        vec2 suv = uv * scale + vec2(seed * 17.3, seed * 31.7);
+        vec2 id = floor(suv);
+        vec2 gv = fract(suv) - 0.5;
+        float rnd = hash21(id);
+        if (rnd < 0.91) return 0.0;
+        vec2 offset = vec2(hash21(id + 1.3) - 0.5, hash21(id + 2.7) - 0.5) * 0.65;
+        float d = length(gv - offset);
+        float size = mix(0.025, 0.065, fract(rnd * 37.0));
+        float star = smoothstep(size, 0.0, d);
+        // 缓慢闪烁
+        float twinkle = 0.65 + 0.35 * sin(time * 2.2 + rnd * 62.8);
+        return star * twinkle * smoothstep(0.91, 1.0, rnd);
+      }
+
+      void main() {
+        float T = clamp(uT, 0.0, 1.0);
+        vec2 uv = vUv;
+
+        // ---------------------------------------------------------------------
+        // 3.1 天空背景渐变（完全由 T 驱动：午夜 → 黎明 → 日出 → 清晨）
+        // ---------------------------------------------------------------------
+        // 午夜 (T=0.0): 天顶 #050a1a, 地平线 #0d1530
+        vec3 zenithNight   = vec3(0.020, 0.039, 0.102);
+        vec3 horizonNight  = vec3(0.051, 0.082, 0.188);
+
+        // 破晓前过渡 (T=0.30): 天顶深靛蓝, 地平线泛起微醺紫红
+        vec3 zenithPreDawn  = vec3(0.055, 0.085, 0.200);
+        vec3 horizonPreDawn = vec3(0.420, 0.210, 0.280);
+
+        // 黎明 (T=0.50): 地平线 #f08a5d / #ffb07a 粉橙霞光, 天顶暮色深蓝
+        vec3 zenithDawn    = vec3(0.110, 0.180, 0.340);
+        vec3 horizonDawn   = vec3(0.941, 0.541, 0.365); // #f08a5d
+        vec3 glowDawn      = vec3(1.000, 0.690, 0.478); // #ffb07a
+
+        // 日出 (T=0.70): 天空迅速转亮蓝, 地平线暖金橙
+        vec3 zenithSunrise  = vec3(0.290, 0.490, 0.720);
+        vec3 horizonSunrise = vec3(0.980, 0.760, 0.520);
+
+        // 清晨 (T=0.85~1.00): 天顶 #6fa8dc, 地平线 #fbe3b0
+        vec3 zenithMorning  = vec3(0.435, 0.659, 0.863); // #6fa8dc
+        vec3 horizonMorning = vec3(0.984, 0.890, 0.690); // #fbe3b0
+
+        vec3 zenithCol, horizonCol;
+        if (T < 0.30) {
+          float k = smoothstep(0.0, 0.30, T);
+          zenithCol  = mix(zenithNight, zenithPreDawn, k);
+          horizonCol = mix(horizonNight, horizonPreDawn, k);
+        } else if (T < 0.50) {
+          float k = smoothstep(0.30, 0.50, T);
+          zenithCol  = mix(zenithPreDawn, zenithDawn, k);
+          horizonCol = mix(horizonPreDawn, horizonDawn, k);
+        } else if (T < 0.72) {
+          float k = smoothstep(0.50, 0.72, T);
+          zenithCol  = mix(zenithDawn, zenithSunrise, k);
+          horizonCol = mix(horizonDawn, horizonSunrise, k);
+        } else {
+          float k = smoothstep(0.72, 0.88, T);
+          zenithCol  = mix(zenithSunrise, zenithMorning, k);
+          horizonCol = mix(horizonSunrise, horizonMorning, k);
+        }
+
+        // 垂直渐变曲线 + 黎明地平线额外霞光带
+        float skyGrad = pow(clamp(uv.y, 0.0, 1.0), 0.72);
+        vec3 skyColor = mix(horizonCol, zenithCol, skyGrad);
+
+        // 黎明 (T≈0.5) 地平线高光带 (#ffb07a)
+        float dawnBand = exp(-abs(T - 0.50) * 14.0) * exp(-uv.y * 4.5);
+        skyColor = mix(skyColor, glowDawn, dawnBand * 0.65);
+
+        // ---------------------------------------------------------------------
+        // 3.2 星空 (T=0 最亮，T≈0.4 完全隐去，主要分布在画面中上部)
+        // ---------------------------------------------------------------------
+        float starVis = smoothstep(0.40, 0.0, T) * smoothstep(0.22, 0.55, uv.y);
+        if (starVis > 0.001) {
+          vec2 starUv = vec2(uv.x * uAspect, uv.y);
+          float s1 = starLayer(starUv, 32.0, 1.0, uDrift);
+          float s2 = starLayer(starUv, 68.0, 2.5, uDrift) * 0.65;
+          skyColor += vec3(0.82, 0.90, 1.0) * (s1 + s2) * starVis;
+        }
+
+        // ---------------------------------------------------------------------
+        // 3.3 右上角明月与清冷月光 (T=0 ~ 0.45，随黎明到来缓缓西沉隐去)
+        // ---------------------------------------------------------------------
+        float moonVis = smoothstep(0.46, 0.0, T);
+        vec2 moonPos = vec2(0.79, 0.79 - T * 0.22);
+        vec2 moonDelta = vec2((uv.x - moonPos.x) * uAspect, uv.y - moonPos.y);
+        float moonDist = length(moonDelta);
+
+        if (moonVis > 0.001) {
+          // 月面圆盘与双层柔和月晕
+          float moonDisc = smoothstep(0.040, 0.035, moonDist);
+          float moonHalo1 = exp(-moonDist * 8.5) * 0.55;
+          float moonHalo2 = exp(-moonDist * 2.6) * 0.22;
+          vec3 moonCol = vec3(0.85, 0.92, 1.0);
+          skyColor += moonCol * (moonDisc * 1.15 + moonHalo1 + moonHalo2) * moonVis;
+
+          // 洒向庭院的清冷月光斜射光束 (T ∈ [0, 0.4])
+          vec2 toMoon = uv - moonPos;
+          float moonBeamAngle = atan(toMoon.y, toMoon.x * uAspect);
+          float moonRays = 0.5 + 0.5 * sin(moonBeamAngle * 14.0 + 1.2);
+          float moonCone = smoothstep(0.85, 0.0, abs( (uv.x - moonPos.x) + (uv.y - moonPos.y) * 0.55 ));
+          skyColor += vec3(0.25, 0.42, 0.72) * moonCone * (0.10 + 0.06 * moonRays) * moonVis * (1.0 - uv.y * 0.5);
+        }
+
+        // ---------------------------------------------------------------------
+        // 3.4 左上角朝阳位置计算 (T=0.45 开始升起，0.50~1.00 照亮云层与花朵)
+        // ---------------------------------------------------------------------
+        float sunProgress = smoothstep(0.42, 1.0, T);
+        vec2 sunPos = vec2(0.18, mix(0.32, 0.82, sunProgress));
+        vec2 sunDelta = vec2((uv.x - sunPos.x) * uAspect, uv.y - sunPos.y);
+        float sunDist = length(sunDelta);
+        float sunVis = smoothstep(0.45, 0.62, T);
+
+        // 太阳本体光球与暖金日晕
+        float sunCore = smoothstep(0.065, 0.015, sunDist);
+        float sunGlow = exp(-sunDist * 3.8) * 0.65 + exp(-sunDist * 1.4) * 0.28;
+        vec3 sunCol = mix(vec3(1.0, 0.58, 0.30), vec3(1.0, 0.93, 0.74), smoothstep(0.50, 0.88, T));
+        skyColor += sunCol * (sunCore * 0.95 + sunGlow) * sunVis;
+
+        // ---------------------------------------------------------------------
+        // 3.5 云卷云舒：辐射雾演变周期（全部是 T 的确定性函数 + 缓慢时钟微漂移）
+        //   T=0.00: 贴近地面的薄雾带
+        //   T=0.00~0.50: 雾气增厚并抬升凝聚为漫天云层
+        //   T=0.50: 云层最厚，底部被地平线霞光染成粉橙色 (#f08a5d/#ffb07a)
+        //   T=0.50~0.85: 太阳升起，云层裂开缝隙并逐渐消散，耶稣光穿透云隙
+        //   T=0.85~1.00: 云散天清，仅留几缕轻盈晨云
+        // ---------------------------------------------------------------------
+        // 确定性位移（倒放 T 时云层也会明显倒退回卷）+ 极缓慢时钟漂移
+        vec2 cloudWind = vec2(-T * 1.35 + uDrift * 0.012, -T * 0.35);
+
+        // 计算高度遮罩：T=0 时集中在底部薄雾带；T=0.5 时铺满中低空；T>0.5 向高空抬升消散
+        float riseFactor = smoothstep(0.0, 0.50, T);
+        float clearFactor = smoothstep(0.50, 0.88, T);
+
+        // 采样主云层 FBM 与次级细节（用于计算云底法线和云隙）
+        vec2 cloudUv = vec2(uv.x * uAspect * 1.45, uv.y * 2.4) + cloudWind;
+        float nBase = fbm(cloudUv);
+        float nDetail = fbm(cloudUv * 2.15 - vec2(T * 0.6, T * 0.25));
+        float rawCloud = mix(nBase, nDetail, 0.38);
+
+        // 稍微偏上方的采样，用于判断当前像素是否位于云朵底部边缘（承接黎明仰光）
+        float nAbove = fbm(cloudUv + vec2(0.0, 0.14));
+        float bottomEdge = clamp((nAbove - nBase) * 3.2 + (1.0 - uv.y) * 0.45, 0.0, 1.0);
+
+        // 1) 午夜低空薄辐射雾带 (T=0 最明显，随日出消散)
+        float nightMistBand = exp(-pow((uv.y - 0.11) / 0.10, 2.0)) * (1.0 - smoothstep(0.25, 0.65, T));
+        float mistDensity = smoothstep(0.32, 0.72, rawCloud) * nightMistBand * 0.55;
+
+        // 2) 主体云层高度包络与覆盖率（在 T=0.50 达到峰值）
+        float bandCenterY = mix(0.18, 0.56, riseFactor) + clearFactor * 0.12;
+        float bandHalfHeight = mix(0.14, 0.42, riseFactor);
+        float verticalEnvelope = exp(-pow((uv.y - bandCenterY) / bandHalfHeight, 2.0));
+
+        // 云量：T=0 时极少(主要是低雾)，T=0.50 达到最厚(峰值)，T=0.85~1.00 接近晴空
+        float coverage = mix(0.18, 0.76, riseFactor) * (1.0 - 0.82 * clearFactor);
+        // 在 T ∈ [0.52, 0.85] 增加云层裂隙对比度，让阳光从云缝中穿出
+        float gapContrast = 1.0 + 0.55 * sin(clamp((T - 0.50) / 0.35, 0.0, 1.0) * 3.14159);
+        float cloudThreshold = 1.0 - coverage;
+        float mainCloud = smoothstep(cloudThreshold - 0.12 / gapContrast, cloudThreshold + 0.22, rawCloud) * verticalEnvelope;
+
+        float totalCloud = clamp(mainCloud + mistDensity, 0.0, 0.94);
+
+        // ---------------------------------------------------------------------
+        // 3.6 云层着色：月夜蓝银 → 黎明粉橙云底 (#f08a5d/#ffb07a) → 清晨洁白金边
+        // ---------------------------------------------------------------------
+        // 午夜云色：受月光映照的深蓝银灰
+        vec3 cloudNightTop = vec3(0.16, 0.24, 0.38);
+        vec3 cloudNightBot = vec3(0.08, 0.13, 0.24);
+        vec3 cloudNight = mix(cloudNightBot, cloudNightTop, uv.y + 0.25 * rawCloud);
+
+        // 黎明云色 (T=0.5)：云背深紫蓝，云底被地平线霞光强烈照亮为粉橙色
+        vec3 cloudDawnTop  = vec3(0.26, 0.24, 0.40);
+        vec3 cloudDawnUnder = mix(vec3(0.941, 0.541, 0.365), vec3(1.0, 0.72, 0.50), bottomEdge);
+        float underWeight = clamp(bottomEdge * 0.75 + (1.0 - uv.y) * 0.45, 0.0, 1.0);
+        vec3 cloudDawn = mix(cloudDawnTop, cloudDawnUnder, underWeight);
+
+        // 清晨云色 (T>0.7)：洁白轻云带温暖阳光金边
+        vec3 cloudMorningShadow = vec3(0.76, 0.84, 0.94);
+        vec3 cloudMorningLit    = vec3(1.00, 0.98, 0.93);
+        vec3 cloudMorning = mix(cloudMorningShadow, cloudMorningLit, clamp(rawCloud * 1.2, 0.0, 1.0));
+
+        vec3 cloudColor;
+        if (T < 0.50) {
+          cloudColor = mix(cloudNight, cloudDawn, smoothstep(0.12, 0.48, T));
+        } else {
+          cloudColor = mix(cloudDawn, cloudMorning, smoothstep(0.50, 0.80, T));
+        }
+
+        // 太阳附近的云层边缘镶金高光 (Silver/Golden lining)
+        float sunLining = exp(-sunDist * 3.0) * totalCloud * (1.0 - totalCloud * 0.65) * sunVis * 2.2;
+        cloudColor += vec3(1.0, 0.85, 0.55) * sunLining;
+
+        // 合成云层到天空
+        vec3 sceneColor = mix(skyColor, cloudColor, totalCloud);
+
+        // ---------------------------------------------------------------------
+        // 3.7 丁达尔效应 / 耶稣光 (God Rays，T=0.50~1.00 从左上角太阳射出)
+        //   - T ∈ [0.50, 0.85]：云开雾散阶段，光束穿过云隙尤为明显
+        //   - T ∈ [0.85, 1.00]：温暖金色斜射光束自左上向右下笼罩牡丹
+        // ---------------------------------------------------------------------
+        float rayActive = smoothstep(0.50, 0.60, T);
+        if (rayActive > 0.001) {
+          vec2 dirToPixel = uv - sunPos;
+          // 仅向太陽右下方与周围辐射光束
+          float forwardMask = smoothstep(-0.15, 0.25, dirToPixel.x - dirToPixel.y * 0.6);
+          float angle = atan(dirToPixel.y, dirToPixel.x * uAspect);
+
+          // 沿太陽连线方向采样云层缝隙，使云隙处产生真实的体积光遮挡条纹
+          float occlusion = 0.0;
+          for (int s = 1; s <= 4; s++) {
+            float frac = float(s) * 0.22;
+            vec2 samplePos = sunPos + dirToPixel * frac;
+            vec2 sampleCloudUv = vec2(samplePos.x * uAspect * 1.45, samplePos.y * 2.4) + cloudWind;
+            float sn = fbm(sampleCloudUv);
+            float sc = smoothstep(cloudThreshold - 0.1, cloudThreshold + 0.2, sn) * coverage;
+            occlusion += sc * 0.25;
+          }
+          float cloudGapTransmittance = clamp(1.0 - occlusion * 1.15, 0.18, 1.0);
+
+          // 放射状光束纹理（完全随 T 确定性旋转变化）
+          float rayPattern = 0.55
+            + 0.28 * sin(angle * 18.0 - T * 4.5)
+            + 0.17 * sin(angle * 37.0 + T * 6.0);
+
+          // 距离衰减与左上方→右下方的主对角光束包络
+          float radialFalloff = exp(-sunDist * 1.35);
+          // 对角线距离：从左上 sunPos 朝向右下花朵中心 (0.5, 0.35)
+          vec2 beamAxis = normalize(vec2(0.55, -0.58));
+          vec2 relUv = vec2((uv.x - sunPos.x) * uAspect, uv.y - sunPos.y);
+          float alongBeam = dot(relUv, beamAxis);
+          float perpBeam = length(relUv - beamAxis * alongBeam);
+          float diagonalBeam = smoothstep(0.55, 0.0, perpBeam) * smoothstep(-0.1, 0.35, alongBeam);
+
+          // T ∈ [0.55, 0.85] 强调云隙耶稣光，T ∈ [0.85, 1.0] 强调清晨温暖金色斜射光柱
+          float crepuscularWeight = smoothstep(0.50, 0.65, T) * (1.0 - 0.35 * smoothstep(0.82, 1.0, T));
+          float morningBeamWeight = smoothstep(0.75, 0.92, T);
+
+          float rays = radialFalloff * rayPattern * cloudGapTransmittance * forwardMask * crepuscularWeight * 0.52;
+          float goldenShaft = diagonalBeam * (0.65 + 0.35 * rayPattern) * morningBeamWeight * 0.36;
+
+          vec3 rayColor = mix(vec3(1.0, 0.72, 0.42), vec3(1.0, 0.90, 0.62), smoothstep(0.55, 0.90, T));
+          sceneColor += rayColor * (rays + goldenShaft);
+        }
+
+        gl_FragColor = vec4(sceneColor, 1.0);
+      }
+    `;
+
+    const skyUniforms = {
+      uT: { value: 0.0 },
+      uDrift: { value: 0.0 },
+      uAspect: { value: window.innerWidth / window.innerHeight }
+    };
+
+    const skyQuad = new THREE.Mesh(
+      new THREE.PlaneGeometry(2, 2),
+      new THREE.ShaderMaterial({
+        vertexShader: skyCloudVertexShader,
+        fragmentShader: skyCloudFragmentShader,
+        uniforms: skyUniforms,
+        depthWrite: false,
+        depthTest: false
+      })
+    );
+    skyQuad.renderOrder = 0;
+    peonyScene.add(skyQuad);
+
+    // =========================================================================
+    // 4. 第二层全屏着色器：牡丹植株（预乘 Alpha 相邻帧混合 + 动态重打光 + 朝阳边缘光）
+    //    以及 根茎前景低空地面雾（夜晚/黎明增加景深，清晨消散）
+    // =========================================================================
+    const plantMistVertexShader = `
+      varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        gl_Position = vec4(position.xy, 0.0, 1.0);
+      }
+    `;
+
+    const plantMistFragmentShader = `
+      precision highp float;
+      varying vec2 vUv;
+
+      uniform sampler2D uTexA;   // 当前相邻前帧
+      uniform sampler2D uTexB;   // 当前相邻后帧
+      uniform float uMix;        // 帧间插值系数 f ∈ [0, 1]
+      uniform float uT;          // 全局时间 T ∈ [0, 1]
+      uniform float uDrift;      // 缓慢漂移时钟
+      uniform float uAspect;     // 屏幕宽高比 width / height
+
+      // 简化噪声函数，用于前景根茎地面薄雾
+      float hash21(vec2 p) {
+        p = fract(p * vec2(234.34, 435.345));
+        p += dot(p, p + 34.23);
+        return fract(p.x * p.y);
+      }
+      float valueNoise(vec2 p) {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        vec2 u = f * f * (3.0 - 2.0 * f);
+        return mix(
+          mix(hash21(i), hash21(i + vec2(1.0, 0.0)), u.x),
+          mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), u.x),
+          u.y
+        );
+      }
+      float mistFbm(vec2 p) {
+        float v = 0.0;
+        float a = 0.5;
+        for (int i = 0; i < 4; i++) {
+          v += a * valueNoise(p);
+          p = p * 2.03 + vec2(7.1, 3.4);
+          a *= 0.5;
+        }
+        return v;
+      }
+
+      // 采样单张贴图并转换为预乘 Alpha (Premultiplied Alpha: rgb * a, a)
+      vec4 samplePremultiplied(sampler2D tex, vec2 uv) {
+        vec4 c = texture2D(tex, uv);
+        return vec4(c.rgb * c.a, c.a);
+      }
+
+      void main() {
+        float T = clamp(uT, 0.0, 1.0);
+        vec2 screenUv = vUv;
+
+        // ---------------------------------------------------------------------
+        // 4.1 计算牡丹画框区域：底部居中 (bottom-centre)，高度 = 85vh，宽高比 1:1
+        // ---------------------------------------------------------------------
+        float plantHeightUv = 0.85;
+        float plantWidthUv = plantHeightUv / max(uAspect, 0.001);
+        float plantLeft = 0.5 - plantWidthUv * 0.5;
+
+        vec2 plantUv = vec2(
+          (screenUv.x - plantLeft) / plantWidthUv,
+          screenUv.y / plantHeightUv
+        );
+
+        vec4 plantPremul = vec4(0.0);
+
+        if (plantUv.x >= 0.0 && plantUv.x <= 1.0 && plantUv.y >= 0.0 && plantUv.y <= 1.0) {
+          // 严格按照规范执行预乘 Alpha 逐像素线性混合：out = mix(texA, texB, f)
+          vec4 texA = samplePremultiplied(uTexA, plantUv);
+          vec4 texB = samplePremultiplied(uTexB, plantUv);
+          plantPremul = mix(texA, texB, clamp(uMix, 0.0, 1.0));
+
+          // -------------------------------------------------------------------
+          // 4.2 根据时间 T 为牡丹重新打光（Relighting）：
+          //   - 午夜 (T=0): 约 0.35 亮度，带清冷月光蓝调
+          //   - 黎明 (T=0.5): 温暖粉橙色霞光浸染
+          //   - 清晨 (T=0.85~1.0): 约 1.05 亮度，温暖明朗晨光
+          // -------------------------------------------------------------------
+          vec3 nightLight   = vec3(0.25, 0.35, 0.54); // 约 0.35 感知亮度 + 蓝调月光
+          vec3 dawnLight    = vec3(0.96, 0.68, 0.52); // 黎明暖橙霞光
+          vec3 sunriseLight = vec3(1.03, 0.92, 0.80); // 日出金橙光
+          vec3 morningLight = vec3(1.08, 1.05, 0.98); // 清晨 ≈ 1.05 暖白光
+
+          vec3 lightTint;
+          if (T < 0.50) {
+            lightTint = mix(nightLight, dawnLight, smoothstep(0.0, 0.50, T));
+          } else if (T < 0.80) {
+            lightTint = mix(dawnLight, sunriseLight, smoothstep(0.50, 0.80, T));
+          } else {
+            lightTint = mix(sunriseLight, morningLight, smoothstep(0.80, 1.00, T));
+          }
+
+          // 黎明时底部受地平线霞光微暖，清晨时左上方受朝阳照射略亮
+          float sunSideGrad = clamp((1.0 - plantUv.x) * 0.35 + plantUv.y * 0.35, 0.0, 1.0);
+          float morningBoost = smoothstep(0.55, 0.90, T) * (sunSideGrad * 0.14);
+          plantPremul.rgb *= (lightTint + vec3(1.0, 0.92, 0.72) * morningBoost);
+
+          // -------------------------------------------------------------------
+          // 4.3 朝阳侧柔和轮廓光 (Rim Highlight)：
+          //   在早晨 (T > 0.50) 沿左上角太阳方向采样邻居 Alpha 差值，勾勒花瓣金边
+          // -------------------------------------------------------------------
+          float rimStrength = smoothstep(0.50, 0.88, T);
+          if (rimStrength > 0.01 && plantPremul.a > 0.05) {
+            vec2 sunOffset = vec2(-0.0032, 0.0032); // 指向左上角太阳方向
+            vec2 neighborUv = clamp(plantUv + sunOffset, 0.0, 1.0);
+            float alphaA = texture2D(uTexA, neighborUv).a;
+            float alphaB = texture2D(uTexB, neighborUv).a;
+            float neighborAlpha = mix(alphaA, alphaB, clamp(uMix, 0.0, 1.0));
+            // 当前像素不透明而左上相邻像素透明，说明处于面向太阳的左上轮廓边缘
+            float rimEdge = clamp(plantPremul.a - neighborAlpha, 0.0, 1.0);
+            vec3 rimColor = vec3(1.0, 0.90, 0.62) * rimEdge * rimStrength * 0.55 * plantPremul.a;
+            plantPremul.rgb += rimColor;
+          }
+        }
+
+        // ---------------------------------------------------------------------
+        // 4.4 第五层：根茎前景地面雾（午夜与黎明萦绕在花茎前方增加景深，清晨消散）
+        // ---------------------------------------------------------------------
+        float mistVis = 1.0 - smoothstep(0.52, 0.84, T);
+        vec4 foreMistPremul = vec4(0.0);
+        if (mistVis > 0.001 && screenUv.y < 0.42) {
+          // 随 T 确定性流动的地面轻雾
+          vec2 mUv = vec2(screenUv.x * uAspect * 2.2 - T * 1.1 + uDrift * 0.015, screenUv.y * 5.5 - T * 0.35);
+          float mNoise = mistFbm(mUv);
+          float heightFade = smoothstep(0.38, 0.02, screenUv.y);
+          // 黎明时前景雾略微增厚随后消散
+          float dawnMistBoost = 1.0 + 0.35 * sin(clamp(T / 0.55, 0.0, 1.0) * 3.14159);
+          float mistAlpha = smoothstep(0.28, 0.78, mNoise) * heightFade * mistVis * 0.38 * dawnMistBoost;
+
+          vec3 mistNightCol = vec3(0.18, 0.27, 0.44);
+          vec3 mistDawnCol  = vec3(0.88, 0.56, 0.44);
+          vec3 mistCol = mix(mistNightCol, mistDawnCol, smoothstep(0.15, 0.50, T));
+          foreMistPremul = vec4(mistCol * mistAlpha, mistAlpha);
+        }
+
+        // 使用预乘 Alpha 合成公式将前景地面雾叠加在牡丹植株前方：
+        // out = fg + bg * (1.0 - fg.a)
+        vec4 combined = foreMistPremul + plantPremul * (1.0 - foreMistPremul.a);
+        gl_FragColor = combined;
+      }
+    `;
+
+    const plantUniforms = {
+      uTexA: { value: fallbackTexture },
+      uTexB: { value: fallbackTexture },
+      uMix: { value: 0.0 },
+      uT: { value: 0.0 },
+      uDrift: { value: 0.0 },
+      uAspect: { value: window.innerWidth / window.innerHeight }
+    };
+
+    // 使用预乘 Alpha 混合模式 (src * 1 + dst * (1 - srcAlpha))，完全消除半透明切换重影与闪烁
+    const plantQuad = new THREE.Mesh(
+      new THREE.PlaneGeometry(2, 2),
+      new THREE.ShaderMaterial({
+        vertexShader: plantMistVertexShader,
+        fragmentShader: plantMistFragmentShader,
+        uniforms: plantUniforms,
+        transparent: true,
+        blending: THREE.CustomBlending,
+        blendEquation: THREE.AddEquation,
+        blendSrc: THREE.OneFactor,
+        blendDst: THREE.OneMinusSrcAlphaFactor,
+        depthWrite: false,
+        depthTest: false
+      })
+    );
+    plantQuad.renderOrder = 1;
+    peonyScene.add(plantQuad);
+
+    // =========================================================================
+    // 5. 第六层：清晨飘落花瓣 (T ∈ [0.85, 1.00])
+    //    - 5 片花瓣从主花 (0.33, 0.47) 与副花 (0.76, 0.24) 附近脱落
+    //    - 位置、摇摆与旋转角度完全是 T 的纯函数，当 T 倒流时花瓣沿原轨迹飞回花朵
+    // =========================================================================
+    const petalVertexShader = `
+      varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `;
+
+    const petalFragmentShader = `
+      precision highp float;
+      varying vec2 vUv;
+      uniform sampler2D uTex;
+      uniform float uOpacity;
+      uniform float uT;
+
+      void main() {
+        vec4 raw = texture2D(uTex, vUv);
+        float a = raw.a * uOpacity;
+        if (a < 0.005) discard;
+        // 晨光暖色照明与预乘 Alpha 输出
+        vec3 warmLight = vec3(1.06, 1.02, 0.95);
+        gl_FragColor = vec4(raw.rgb * warmLight * a, a);
+      }
+    `;
+
+    // 定义 5 片飘落花瓣的确定性轨迹参数（坐标基于 1254x1254 花朵图像的 0~1 归一化坐标）
+    // 注意图像坐标：左上角为 (0, 0)，主花中心约 (0.33, 0.47)，右侧副花中心约 (0.76, 0.24)
+    const PETAL_CONFIGS = [
+      {
+        texIndex: 0,
+        startImgX: 0.34, startImgY: 0.50, // 主花右下侧花瓣
+        driftX: -0.09, fallY: 0.44,
+        swayAmp: 0.045, swayFreq: 2.4, phase: 0.3,
+        rotStart: -0.25, rotSpan: 2.4,
+        tStart: 0.850, tEnd: 0.995, sizeVh: 0.072
+      },
+      {
+        texIndex: 1,
+        startImgX: 0.75, startImgY: 0.27, // 副花下方花瓣
+        driftX: -0.12, fallY: 0.56,
+        swayAmp: 0.052, swayFreq: 2.8, phase: 1.4,
+        rotStart: 0.20, rotSpan: -2.8,
+        tStart: 0.858, tEnd: 1.000, sizeVh: 0.068
+      },
+      {
+        texIndex: 2,
+        startImgX: 0.30, startImgY: 0.46, // 主花左侧花瓣
+        driftX: 0.08, fallY: 0.46,
+        swayAmp: 0.040, swayFreq: 2.1, phase: 2.6,
+        rotStart: 0.10, rotSpan: 2.1,
+        rotFlap: 0.45,
+        tStart: 0.868, tEnd: 1.000, sizeVh: 0.070
+      },
+      {
+        texIndex: 3,
+        startImgX: 0.78, startImgY: 0.23, // 副花右侧花瓣
+        driftX: -0.07, fallY: 0.52,
+        swayAmp: 0.048, swayFreq: 2.5, phase: 3.8,
+        rotStart: -0.35, rotSpan: -2.2,
+        tStart: 0.878, tEnd: 1.000, sizeVh: 0.064
+      },
+      {
+        texIndex: 0,
+        startImgX: 0.36, startImgY: 0.48, // 主花中心偏右花瓣
+        driftX: 0.06, fallY: 0.40,
+        swayAmp: 0.036, swayFreq: 2.0, phase: 5.0,
+        rotStart: 0.05, rotSpan: 1.9,
+        tStart: 0.890, tEnd: 1.000, sizeVh: 0.062
+      }
+    ];
+
+    const petalGeometry = new THREE.PlaneGeometry(1, 1);
+    const petalMeshes = PETAL_CONFIGS.map((cfg, idx) => {
+      const mat = new THREE.ShaderMaterial({
+        vertexShader: petalVertexShader,
+        fragmentShader: petalFragmentShader,
+        uniforms: {
+          uTex: { value: petalTextures[cfg.texIndex] },
+          uOpacity: { value: 0.0 },
+          uT: { value: 0.0 }
+        },
+        transparent: true,
+        blending: THREE.CustomBlending,
+        blendEquation: THREE.AddEquation,
+        blendSrc: THREE.OneFactor,
+        blendDst: THREE.OneMinusSrcAlphaFactor,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        depthTest: false
+      });
+      const mesh = new THREE.Mesh(petalGeometry, mat);
+      mesh.renderOrder = 2 + idx;
+      mesh.visible = false;
+      mesh.userData = { ...cfg };
+      peonyScene.add(mesh);
+      return mesh;
+    });
+
+    // 根据时间 T 更新每片花瓣的确定性位置、旋转与透明度
+    function updateFallingPetals(T, wallTimeSec) {
+      const aspect = window.innerWidth / window.innerHeight;
+      const plantHeightUv = 0.85;
+      const plantWidthUv = plantHeightUv / Math.max(aspect, 0.001);
+      const plantLeftUv = 0.5 - plantWidthUv * 0.5;
+
+      petalMeshes.forEach((mesh) => {
+        const cfg = mesh.userData;
+        if (T <= cfg.tStart) {
+          mesh.visible = false;
+          mesh.material.uniforms.uOpacity.value = 0.0;
+          return;
+        }
+
+        mesh.visible = true;
+        // 归一化下落进度 u ∈ [0, 1]，完全由 T 决定
+        const u = clamp((T - cfg.tStart) / (cfg.tEnd - cfg.tStart), 0.0, 1.0);
+        // 脱离花朵时平滑淡入
+        const opacity = smoothstep(0.0, 0.08, u);
+        mesh.material.uniforms.uOpacity.value = opacity;
+        mesh.material.uniforms.uT.value = T;
+
+        // 重力加速与空气阻力结合的柔美下落曲线
+        const fallProgress = 0.35 * u + 0.65 * (u * u);
+
+        // 缓慢微风呼吸（幅度极小，且在 u=0 处收敛为 0，保证起点完全锚定在花朵上）
+        const breeze = Math.sin(wallTimeSec * 1.6 + cfg.phase) * 0.004 * smoothstep(0.0, 0.25, u);
+
+        // 在花朵图像归一化坐标 (0~1, 左上角为原点) 中的当前位置
+        const imgX = cfg.startImgX
+          + cfg.driftX * u
+          + Math.sin(u * Math.PI * cfg.swayFreq + cfg.phase) * cfg.swayAmp * smoothstep(0.0, 0.15, u)
+          + breeze;
+        const imgY = cfg.startImgY + cfg.fallY * fallProgress;
+
+        // 将花朵图像坐标转换为屏幕 UV (0~1, 左下角为原点)，再转为正交相机 NDC (-1~1)
+        const screenUvX = plantLeftUv + imgX * plantWidthUv;
+        const screenUvY = (1.0 - imgY) * plantHeightUv;
+        const ndcX = screenUvX * 2.0 - 1.0;
+        const ndcY = screenUvY * 2.0 - 1.0;
+
+        mesh.position.set(ndcX, ndcY, 0);
+
+        // 保持花瓣正方形比例并附带三维翻转揺曳感
+        const baseScaleY = cfg.sizeVh * 2.0;
+        const baseScaleX = baseScaleY / Math.max(aspect, 0.001);
+        const flutter = 0.82 + 0.18 * Math.cos(u * Math.PI * cfg.swayFreq * 1.5 + cfg.phase);
+        mesh.scale.set(baseScaleX * flutter, baseScaleY, 1);
+
+        // 旋转角度也是 T 的确定性函数
+        mesh.rotation.z = cfg.rotStart
+          + cfg.rotSpan * u
+          + 0.35 * Math.sin(u * Math.PI * cfg.swayFreq + cfg.phase);
+      });
+    }
+
+    // =========================================================================
+    // 6. 根据时间 T 计算牡丹帧索引与混合权重（严格遵循时间表锚点）
+    //    - T ∈ [0, 0.50]   → frame 1 → 5   (0-based: 0 → 4)
+    //    - T ∈ [0.50, 0.85] → frame 5 → 12  (0-based: 4 → 11)
+    //    - T ≥ 0.85        → frame 12       (0-based: 11)
+    // =========================================================================
+    function updatePlantFramesForT(T) {
+      let framePos;
+      if (T <= 0.50) {
+        // 使用微平滑与线性结合，确保在 T=0 为第1帧，T=0.5 精确为第5帧
+        const u = clamp(T / 0.50, 0.0, 1.0);
+        framePos = u * 4.0;
+      } else if (T <= 0.85) {
+        const u = clamp((T - 0.50) / 0.35, 0.0, 1.0);
+        framePos = 4.0 + u * 7.0;
+      } else {
+        framePos = 11.0;
+      }
+
+      const idxA = clamp(Math.floor(framePos), 0, TOTAL_FRAMES - 1);
+      const idxB = clamp(idxA + 1, 0, TOTAL_FRAMES - 1);
+      const mixFactor = framePos - idxA;
+
+      plantUniforms.uTexA.value = getNearestFrameTexture(idxA);
+      plantUniforms.uTexB.value = getNearestFrameTexture(idxB);
+      plantUniforms.uMix.value = mixFactor;
+    }
+
+    // =========================================================================
+    // 7. 时钟标签格式化（00:00 午夜 → 05:30 黎明 → 07:00 → 08:00 清晨）
+    // =========================================================================
+    function formatClockLabel(T) {
+      const t = clamp(T, 0.0, 1.0);
+      let totalMinutes;
+      if (t <= 0.50) {
+        // 00:00 (0分) → 05:30 (330分)
+        totalMinutes = (t / 0.50) * 330.0;
+      } else if (t <= 0.85) {
+        // 05:30 (330分) → 07:00 (420分)
+        totalMinutes = 330.0 + ((t - 0.50) / 0.35) * 90.0;
+      } else {
+        // 07:00 (420分) → 08:00 (480分)
+        totalMinutes = 420.0 + ((t - 0.85) / 0.15) * 60.0;
+      }
+
+      const minsRounded = Math.round(totalMinutes);
+      const hh = String(Math.floor(minsRounded / 60)).padStart(2, '0');
+      const mm = String(minsRounded % 60).padStart(2, '0');
+
+      let period;
+      if (t < 0.18) period = '午夜';
+      else if (t < 0.42) period = '将晓';
+      else if (t < 0.62) period = '黎明';
+      else if (t < 0.84) period = '日出';
+      else period = '清晨';
+
+      return `${hh}:${mm} ${period}`;
+    }
+
+    // 更新方向徽章与面板读数
+    function updateUIForT(T, dT) {
+      if (dT > 0.00005) {
+        lastDirection = 1;
+      } else if (dT < -0.00005) {
+        lastDirection = -1;
+      }
+
+      if (lastDirection >= 0) {
+        dirBadge.innerText = '时光流逝 ▶';
+        dirBadge.classList.remove('rewind');
+      } else {
+        dirBadge.innerText = '时光倒流 ◀';
+        dirBadge.classList.add('rewind');
+      }
+
+      clockLabel.innerText = formatClockLabel(T);
+      valLabel.innerText = `T = ${T.toFixed(2)}`;
+      bloomSlider.value = T;
+    }
+
+    // =========================================================================
+    // 8. 双光剑模式（完整保留 base_reference.html 的光剑 3D 场景与交互）
+    // =========================================================================
+    const saberScene = new THREE.Scene();
+    const saberCamera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+    saberCamera.position.set(0, 4.5, 9);
+
+    const controls = new THREE.OrbitControls(saberCamera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.enabled = false; // 默认在牡丹模式下禁用，切换到光剑模式时启用
+
+    saberScene.add(new THREE.AmbientLight(0xffffff, 0.6));
+    const mainLight = new THREE.DirectionalLight(0xffffff, 1.4);
+    mainLight.position.set(5, 12, 6);
+    saberScene.add(mainLight);
+
+    function createLightsaber(bladeColorHex) {
+      const g = new THREE.Group();
+      const hilt = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.06, 0.07, 0.55, 16),
+        new THREE.MeshStandardMaterial({ color: 0x222225, metalness: 0.9, roughness: 0.2 })
+      );
+      hilt.position.y = -0.27;
+      g.add(hilt);
+      const blade = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.04, 0.04, 3.2, 16),
+        new THREE.MeshBasicMaterial({ color: bladeColorHex })
+      );
+      blade.position.y = 1.35;
+      g.add(blade);
+      return g;
+    }
+
+    const saberCyan = createLightsaber(0x00f0ff);
+    const saberRed = createLightsaber(0xff0044);
+    saberCyan.position.set(-1.2, 1.5, 0);
+    saberRed.position.set(1.2, 1.5, 0);
+    saberScene.add(saberCyan, saberRed);
+
+    // 顶部模式切换事件
+    document.getElementById('btn-peony').addEventListener('click', () => {
+      activeMode = 'peony';
+      controls.enabled = false;
+      document.getElementById('btn-peony').classList.add('active');
+      document.getElementById('btn-saber').classList.remove('active');
+      document.getElementById('peony-panel').style.display = 'block';
+    });
+
+    document.getElementById('btn-saber').addEventListener('click', () => {
+      activeMode = 'saber';
+      controls.enabled = true;
+      document.getElementById('btn-saber').classList.add('active');
+      document.getElementById('btn-peony').classList.remove('active');
+      document.getElementById('peony-panel').style.display = 'none';
+    });
+
+    // =========================================================================
+    // 9. 交互控制：滑块、▶ 播放、◀ 倒放 与 window.setTime(t) 测试接口
+    // =========================================================================
+    bloomSlider.addEventListener('input', (e) => {
+      playDir = 0;
+      targetT = clamp(parseFloat(e.target.value) || 0, 0, 1);
+    });
+
+    // ▶ 播放按钮：从 0 → 1 播放（约 12 秒）；若已在终点附近则从 0 重新开始
+    document.getElementById('play-btn').addEventListener('click', () => {
+      if (currentT >= 0.995) {
+        currentT = 0.0;
+        targetT = 0.0;
+        prevT = 0.0;
+      }
+      playDir = 1;
+      lastDirection = 1;
+      lastFrameTime = performance.now();
+      updateUIForT(currentT, 0.001);
+    });
+
+    // ◀ 倒放按钮：从 1 → 0 倒放（约 12 秒）；若已在起点附近则从 1 开始倒放
+    document.getElementById('rewind-btn').addEventListener('click', () => {
+      if (currentT <= 0.005) {
+        currentT = 1.0;
+        targetT = 1.0;
+        prevT = 1.0;
+      }
+      playDir = -1;
+      lastDirection = -1;
+      lastFrameTime = performance.now();
+      updateUIForT(currentT, -0.001);
+    });
+
+    // 渲染单帧牡丹场景的函数
+    function renderPeonyAt(T, wallTimeSec) {
+      const clampedT = clamp(T, 0.0, 1.0);
+      skyUniforms.uT.value = clampedT;
+      skyUniforms.uDrift.value = wallTimeSec;
+      plantUniforms.uT.value = clampedT;
+      plantUniforms.uDrift.value = wallTimeSec;
+
+      updatePlantFramesForT(clampedT);
+      updateFallingPetals(clampedT, wallTimeSec);
+      renderer.render(peonyScene, peonyCamera);
+    }
+
+    // 暴露给自动化测试的全局函数：立即跳转到指定时间 t 并停止自动播放
+    window.setTime = function(t) {
+      const clamped = clamp(Number(t) || 0, 0.0, 1.0);
+      playDir = 0;
+      const dT = clamped - currentT;
+      prevT = currentT;
+      currentT = clamped;
+      targetT = clamped;
+      updateUIForT(currentT, dT);
+      renderPeonyAt(currentT, performance.now() * 0.001);
+    };
+
+    // =========================================================================
+    // 10. MediaPipe 手势识别（张开手掌 = 时光前进，握拢手掌 = 时光倒流）
+    // =========================================================================
+    const videoElem = document.getElementById('webcam-video');
+    const skeletonCanvas = document.getElementById('skeleton-canvas');
+    const skelCtx = skeletonCanvas.getContext('2d');
+    let cameraInstance = null;
+
+    // 手势张开度自适应校准区间（初始默认 min=0.55, max=0.90，运行中超出立即拓宽，且跨度不低于 0.15）
+    let opennessMin = 0.55;
+    let opennessMax = 0.90;
+    const FINGER_CHAINS = [
+      [5, 6, 7, 8],     // 食指: mcp, pip, dip, tip
+      [9, 10, 11, 12],  // 中指
+      [13, 14, 15, 16], // 无名指
+      [17, 18, 19, 20]  // 小指
+    ];
+
+    function dist3D(a, b) {
+      return Math.hypot(a.x - b.x, a.y - b.y, (a.z || 0) - (b.z || 0));
+    }
+
+    function computeHandOpenness3D(lm) {
+      const wrist = lm[0];
+      let sumRatio = 0;
+      for (let i = 0; i < FINGER_CHAINS.length; i++) {
+        const [mcpIdx, pipIdx, dipIdx, tipIdx] = FINGER_CHAINS[i];
+        const mcp = lm[mcpIdx];
+        const pip = lm[pipIdx];
+        const dip = lm[dipIdx];
+        const tip = lm[tipIdx];
+        const chainLen =
+          dist3D(wrist, mcp) +
+          dist3D(mcp, pip) +
+          dist3D(pip, dip) +
+          dist3D(dip, tip);
+        const directLen = dist3D(wrist, tip);
+        sumRatio += chainLen > 1e-6 ? (directLen / chainLen) : 0;
+      }
+      return sumRatio / FINGER_CHAINS.length;
+    }
+
+    function onHandResults(results) {
+      skelCtx.clearRect(0, 0, skeletonCanvas.width, skeletonCanvas.height);
+      if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+        let bestRawOpenness = -Infinity;
+
+        results.multiHandLandmarks.forEach((lm) => {
+          skelCtx.fillStyle = '#00ffcc';
+          lm.forEach((pt) => {
+            skelCtx.beginPath();
+            skelCtx.arc(pt.x * skeletonCanvas.width, pt.y * skeletonCanvas.height, 2, 0, Math.PI * 2);
+            skelCtx.fill();
+          });
+
+          const rawOpenness = computeHandOpenness3D(lm);
+          if (rawOpenness > bestRawOpenness) {
+            bestRawOpenness = rawOpenness;
+          }
+        });
+
+        // 自适应校准：超出当前上下限时立即拓宽，且保证 (max - min) >= 0.15
+        if (bestRawOpenness < opennessMin) opennessMin = bestRawOpenness;
+        if (bestRawOpenness > opennessMax) opennessMax = bestRawOpenness;
+        const span = Math.max(opennessMax - opennessMin, 0.15);
+        const n = clamp((bestRawOpenness - opennessMin) / span, 0.0, 1.0);
+
+        // 死区与平滑映射：n <= 0.15 -> 0，n >= 0.85 -> 1，中间区间 smoothstep(0.15, 0.85, n)
+        playDir = 0;
+        if (n <= 0.15) {
+          targetT = 0.0;
+        } else if (n >= 0.85) {
+          targetT = 1.0;
+        } else {
+          targetT = smoothstep(0.15, 0.85, n);
+        }
+
+        if (missingFiles.length === 0) {
+          hudStatus.innerText = `张开 ${Math.round(n * 100)}%`;
+        }
+      } else {
+        if (missingFiles.length === 0) {
+          hudStatus.innerText = '未检测到手势';
+        }
+      }
+    }
+
+    let hands = null;
+    if (typeof Hands !== 'undefined') {
+      hands = new Hands({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+      });
+      hands.setOptions({
+        maxNumHands: 2,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5
+      });
+      hands.onResults(onHandResults);
+    } else if (missingFiles.length === 0) {
+      hudStatus.innerText = 'MediaPipe 加载失败';
+    }
+
+    document.getElementById('cam-toggle').addEventListener('click', async () => {
+      if (!hands || typeof Camera === 'undefined') {
+        if (missingFiles.length === 0) hudStatus.innerText = 'MediaPipe 不可用';
+        return;
+      }
+      if (!cameraInstance) {
+        try {
+          cameraInstance = new Camera(videoElem, {
+            onFrame: async () => { await hands.send({ image: videoElem }); },
+            width: 320,
+            height: 240
+          });
+          await cameraInstance.start();
+          document.getElementById('cam-toggle').innerText = '📷 摄像头已激活';
+        } catch (err) {
+          cameraInstance = null;
+          if (missingFiles.length === 0) hudStatus.innerText = '摄像头启动失败';
+          console.error(err);
+        }
+      }
+    });
+
+    // =========================================================================
+    // 11. 主动画循环（60fps 渲染与平滑时间推进）
+    // =========================================================================
+    function animate() {
+      requestAnimationFrame(animate);
+      const now = performance.now();
+      const dtMs = Math.min(now - lastFrameTime, 100);
+      lastFrameTime = now;
+
+      if (activeMode === 'peony') {
+        prevT = currentT;
+
+        if (playDir !== 0) {
+          // 自动正放或倒放模式：全程约 12 秒
+          currentT = clamp(currentT + playDir * (dtMs / PLAY_DURATION_MS), 0.0, 1.0);
+          targetT = currentT;
+          if (playDir === 1 && currentT >= 1.0) playDir = 0;
+          if (playDir === -1 && currentT <= 0.0) playDir = 0;
+        } else {
+          // 手势或滑块驱动模式：按规范平滑逼近 targetT (T += (target - T) * 0.06)，并在 |target - T| < 0.002 时直接吸附
+          currentT += (targetT - currentT) * 0.06;
+          if (Math.abs(targetT - currentT) < 0.002) {
+            currentT = targetT;
+          }
+        }
+
+        const dT = currentT - prevT;
+        updateUIForT(currentT, dT);
+        renderPeonyAt(currentT, now * 0.001);
+      } else {
+        // 双光剑 3D 模式
+        const t = now * 0.003;
+        saberCyan.rotation.z = Math.sin(t) * 0.4 + 0.3;
+        saberRed.rotation.z = -Math.sin(t + 1.5) * 0.4 - 0.3;
+        controls.update();
+        renderer.render(saberScene, saberCamera);
+      }
+    }
+
+    // 窗口尺寸自适应
+    window.addEventListener('resize', () => {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      const aspect = w / Math.max(h, 1);
+
+      renderer.setSize(w, h);
+      skyUniforms.uAspect.value = aspect;
+      plantUniforms.uAspect.value = aspect;
+
+      saberCamera.aspect = aspect;
+      saberCamera.updateProjectionMatrix();
+    });
+
+    // 初始渲染在 T = 0 (00:00 午夜)
+    updateUIForT(0.0, 0.0);
+    renderPeonyAt(0.0, 0.0);
+    animate();
+  </script>
+</body>
+</html>

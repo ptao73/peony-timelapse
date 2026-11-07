@@ -1,0 +1,8 @@
+Edit the attached image (bloom_06.png, an oil painting of red tree peonies on a black background).
+Use your image generation/editing tool to produce a version with a TRANSPARENT background (PNG with alpha channel):
+- keep the plant exactly as it is: both peony flowers, the small bud lower-right, all stems and leaves, same positions, same size, same realistic classical oil-painting style and crimson colours
+- REMOVE the black background and the golden light beam completely; everything that is not part of the plant must be fully transparent
+- the plant should be lit by soft neutral light (no strong golden cast), because the lighting will be added later
+- square canvas, same framing
+Request a transparent background from the image tool (background: transparent) if that option exists.
+Then reply with the absolute path of the generated image.
